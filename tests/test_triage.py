@@ -117,6 +117,21 @@ class TestStripMarkdownFences:
         text = "  [1, 2]  "
         assert _strip_markdown_fences(text) == "[1, 2]"
 
+    def test_strips_fences_with_language_tag(self):
+        text = "```python\n[1, 2]\n```"
+        assert _strip_markdown_fences(text) == "[1, 2]"
+
+    def test_empty_string_passthrough(self):
+        assert _strip_markdown_fences("") == ""
+
+    def test_strips_nested_content_with_newlines(self):
+        inner = '[\n  {"a": 1},\n  {"b": 2}\n]'
+        text = f"```json\n{inner}\n```"
+        result = _strip_markdown_fences(text)
+        # Should be parseable as JSON after stripping
+        parsed = json.loads(result)
+        assert len(parsed) == 2
+
 
 # ---------------------------------------------------------------------------
 # _chunk
@@ -141,6 +156,18 @@ class TestChunk:
     def test_size_one(self):
         assert _chunk([1, 2, 3], 1) == [[1], [2], [3]]
 
+    def test_preserves_order(self):
+        data = list(range(100))
+        chunks = _chunk(data, 10)
+        flat = [x for c in chunks for x in c]
+        assert flat == data
+
+    def test_single_element_list(self):
+        assert _chunk([42], 5) == [[42]]
+
+    def test_size_equals_list_length(self):
+        assert _chunk([1, 2, 3], 3) == [[1, 2, 3]]
+
 
 # ---------------------------------------------------------------------------
 # _max_severity
@@ -163,6 +190,19 @@ class TestMaxSeverity:
 
     def test_all_medium(self):
         assert _max_severity([Severity.MEDIUM, Severity.MEDIUM]) == Severity.MEDIUM
+
+    def test_mixed_all_four_levels(self):
+        all_severities = [Severity.LOW, Severity.MEDIUM, Severity.HIGH, Severity.CRITICAL]
+        assert _max_severity(all_severities) == Severity.CRITICAL
+
+    def test_single_critical(self):
+        assert _max_severity([Severity.CRITICAL]) == Severity.CRITICAL
+
+    def test_high_and_medium(self):
+        assert _max_severity([Severity.HIGH, Severity.MEDIUM]) == Severity.HIGH
+
+    def test_low_and_medium(self):
+        assert _max_severity([Severity.LOW, Severity.MEDIUM]) == Severity.MEDIUM
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +230,36 @@ class TestDefaultTriageResult:
         issue = _make_issue(id=1)
         result = _default_triage_result(issue)
         assert result.complexity == Complexity.UNKNOWN
+
+    def test_impact_category_is_other(self):
+        issue = _make_issue(id=1)
+        result = _default_triage_result(issue)
+        assert result.impact_category == ImpactCategory.OTHER
+
+    def test_summary_uses_issue_title(self):
+        issue = _make_issue(id=1, title="Crash on startup")
+        result = _default_triage_result(issue)
+        assert result.summary == "Crash on startup"
+
+    def test_duplicate_of_is_none(self):
+        issue = _make_issue(id=1)
+        result = _default_triage_result(issue)
+        assert result.duplicate_of is None
+
+    def test_related_issue_ids_is_empty(self):
+        issue = _make_issue(id=1)
+        result = _default_triage_result(issue)
+        assert result.related_issue_ids == []
+
+    def test_tags_is_empty(self):
+        issue = _make_issue(id=1)
+        result = _default_triage_result(issue)
+        assert result.tags == []
+
+    def test_reasoning_mentions_default(self):
+        issue = _make_issue(id=1)
+        result = _default_triage_result(issue)
+        assert "Default" in result.reasoning or "default" in result.reasoning
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +343,71 @@ class TestDictToTriageResult:
         result = _dict_to_triage_result(d)
         assert result.related_issue_ids == []
 
+    def test_all_severity_levels_parsed(self):
+        for sev in ["critical", "high", "medium", "low"]:
+            d = self._valid_dict()
+            d["severity"] = sev
+            result = _dict_to_triage_result(d)
+            assert result.severity == Severity(sev)
+
+    def test_all_impact_categories_parsed(self):
+        for cat in ["crash", "performance", "security", "ux", "data_loss", "regression", "other"]:
+            d = self._valid_dict()
+            d["impact_category"] = cat
+            result = _dict_to_triage_result(d)
+            assert result.impact_category == ImpactCategory(cat)
+
+    def test_all_complexity_levels_parsed(self):
+        for comp in ["low", "medium", "high", "unknown"]:
+            d = self._valid_dict()
+            d["complexity"] = comp
+            result = _dict_to_triage_result(d)
+            assert result.complexity == Complexity(comp)
+
+    def test_priority_score_at_boundary_100(self):
+        d = self._valid_dict()
+        d["priority_score"] = 100.0
+        result = _dict_to_triage_result(d)
+        assert result.priority_score == 100.0
+
+    def test_priority_score_at_boundary_0(self):
+        d = self._valid_dict()
+        d["priority_score"] = 0.0
+        result = _dict_to_triage_result(d)
+        assert result.priority_score == 0.0
+
+    def test_summary_and_reasoning_preserved(self):
+        d = self._valid_dict()
+        d["summary"] = "Specific summary text."
+        d["reasoning"] = "Specific reasoning text."
+        result = _dict_to_triage_result(d)
+        assert result.summary == "Specific summary text."
+        assert result.reasoning == "Specific reasoning text."
+
+    def test_empty_related_ids_list(self):
+        d = self._valid_dict()
+        d["related_issue_ids"] = []
+        result = _dict_to_triage_result(d)
+        assert result.related_issue_ids == []
+
+    def test_empty_tags_list(self):
+        d = self._valid_dict()
+        d["tags"] = []
+        result = _dict_to_triage_result(d)
+        assert result.tags == []
+
+    def test_tags_non_list_becomes_empty(self):
+        d = self._valid_dict()
+        d["tags"] = "not-a-list"
+        result = _dict_to_triage_result(d)
+        assert result.tags == []
+
+    def test_issue_id_as_string_is_parsed(self):
+        d = self._valid_dict()
+        d["issue_id"] = "42"
+        result = _dict_to_triage_result(d)
+        assert result.issue_id == 42
+
 
 # ---------------------------------------------------------------------------
 # _UnionFind
@@ -284,6 +419,7 @@ class TestUnionFind:
         uf = _UnionFind([1, 2, 3])
         assert uf.find(1) == 1
         assert uf.find(2) == 2
+        assert uf.find(3) == 3
 
     def test_union_merges_sets(self):
         uf = _UnionFind([1, 2, 3])
@@ -307,6 +443,47 @@ class TestUnionFind:
         uf.union(1, 2)
         uf.union(3, 4)
         assert uf.find(1) != uf.find(3)
+        assert uf.find(2) != uf.find(4)
+
+    def test_single_element(self):
+        uf = _UnionFind([42])
+        assert uf.find(42) == 42
+
+    def test_union_commutative(self):
+        uf1 = _UnionFind([1, 2])
+        uf1.union(1, 2)
+        root_1 = uf1.find(1)
+
+        uf2 = _UnionFind([1, 2])
+        uf2.union(2, 1)
+        root_2 = uf2.find(1)
+
+        # Both should be in the same set (root may differ but find() is consistent)
+        assert uf1.find(1) == uf1.find(2)
+        assert uf2.find(1) == uf2.find(2)
+
+    def test_path_compression_consistency(self):
+        """After path compression, find() remains consistent."""
+        uf = _UnionFind([1, 2, 3, 4, 5])
+        uf.union(1, 2)
+        uf.union(2, 3)
+        uf.union(3, 4)
+        uf.union(4, 5)
+        root = uf.find(1)
+        for i in range(1, 6):
+            assert uf.find(i) == root
+
+    def test_multiple_disjoint_sets(self):
+        uf = _UnionFind([1, 2, 3, 4, 5, 6])
+        uf.union(1, 2)
+        uf.union(3, 4)
+        uf.union(5, 6)
+        assert uf.find(1) == uf.find(2)
+        assert uf.find(3) == uf.find(4)
+        assert uf.find(5) == uf.find(6)
+        assert uf.find(1) != uf.find(3)
+        assert uf.find(1) != uf.find(5)
+        assert uf.find(3) != uf.find(5)
 
 
 # ---------------------------------------------------------------------------
@@ -446,6 +623,45 @@ class TestClassifyIssues:
         assert client.render_and_complete.call_count == 3
         assert len(results) == 5
 
+    def test_correct_severity_from_llm_response(self):
+        issues = [_make_issue(id=1)]
+        response = json.dumps([
+            {
+                "issue_id": 1,
+                "severity": "critical",
+                "impact_category": "security",
+                "priority_score": 99.0,
+                "summary": "Critical security flaw.",
+                "reasoning": "Auth bypass.",
+                "duplicate_of": None,
+                "related_issue_ids": [],
+                "complexity": "high",
+                "tags": ["security"],
+            }
+        ])
+        engine = self._engine(response)
+        results = engine._classify_issues(issues)
+        assert results[0].severity == Severity.CRITICAL
+        assert results[0].impact_category == ImpactCategory.SECURITY
+        assert results[0].priority_score == 99.0
+
+    def test_batch_size_one_processes_each_issue_separately(self):
+        issues = [_make_issue(id=i) for i in range(1, 4)]
+        client = _make_llm_client("[]")
+        engine = TriageEngine(llm_client=client, batch_size=1)
+        results = engine._classify_issues(issues)
+        # 3 issues with batch_size=1 → 3 LLM calls
+        assert client.render_and_complete.call_count == 3
+        assert len(results) == 3
+
+    def test_all_default_results_have_correct_issue_ids(self):
+        """When LLM returns empty array, all issues should get default results."""
+        issues = [_make_issue(id=i) for i in [10, 20, 30]]
+        engine = self._engine("[]")
+        results = engine._classify_issues(issues)
+        result_ids = {r.issue_id for r in results}
+        assert result_ids == {10, 20, 30}
+
 
 # ---------------------------------------------------------------------------
 # TriageEngine._build_groups
@@ -545,6 +761,85 @@ class TestBuildGroups:
         groups = engine._build_groups(issues, results)
         assert set(groups[0].tags) == {"auth", "jwt", "security"}
 
+    def test_canonical_issue_is_highest_priority(self):
+        engine = self._engine()
+        issues = [_make_issue(id=1), _make_issue(id=2), _make_issue(id=3)]
+        results = [
+            _make_triage_result(issue_id=1, priority_score=50.0),
+            _make_triage_result(issue_id=2, duplicate_of=1, priority_score=90.0),
+            _make_triage_result(issue_id=3, duplicate_of=1, priority_score=70.0),
+        ]
+        groups = engine._build_groups(issues, results)
+        assert len(groups) == 1
+        # Issue 2 has highest priority_score so should be canonical
+        assert groups[0].canonical_issue_id == 2
+
+    def test_group_id_assigned(self):
+        engine = self._engine()
+        issues = [_make_issue(id=1)]
+        results = [_make_triage_result(issue_id=1)]
+        groups = engine._build_groups(issues, results)
+        assert groups[0].id.startswith("group_")
+
+    def test_group_issue_ids_are_sorted(self):
+        engine = self._engine()
+        issues = [_make_issue(id=3), _make_issue(id=1), _make_issue(id=2)]
+        results = [
+            _make_triage_result(issue_id=3, priority_score=80.0),
+            _make_triage_result(issue_id=1, duplicate_of=3, priority_score=30.0),
+            _make_triage_result(issue_id=2, duplicate_of=3, priority_score=50.0),
+        ]
+        groups = engine._build_groups(issues, results)
+        assert len(groups) == 1
+        assert groups[0].issue_ids == sorted(groups[0].issue_ids)
+
+    def test_group_title_taken_from_canonical_issue(self):
+        engine = self._engine()
+        issues = [
+            _make_issue(id=1, title="Primary issue title"),
+            _make_issue(id=2, title="Duplicate issue title"),
+        ]
+        results = [
+            _make_triage_result(issue_id=1, priority_score=80.0),
+            _make_triage_result(issue_id=2, duplicate_of=1, priority_score=20.0),
+        ]
+        groups = engine._build_groups(issues, results)
+        # Canonical is id=1 (highest priority_score)
+        assert "Primary issue title" in groups[0].title
+
+    def test_chain_of_duplicates_merged_into_single_group(self):
+        """A chain 1 <- 2 <- 3 should form a single group."""
+        engine = self._engine()
+        issues = [_make_issue(id=i) for i in [1, 2, 3]]
+        results = [
+            _make_triage_result(issue_id=1, priority_score=90.0),
+            _make_triage_result(issue_id=2, duplicate_of=1, priority_score=70.0),
+            _make_triage_result(issue_id=3, duplicate_of=2, priority_score=50.0),
+        ]
+        groups = engine._build_groups(issues, results)
+        assert len(groups) == 1
+        assert set(groups[0].issue_ids) == {1, 2, 3}
+
+    def test_impact_category_from_canonical_issue(self):
+        engine = self._engine()
+        issues = [_make_issue(id=1), _make_issue(id=2)]
+        results = [
+            _make_triage_result(
+                issue_id=1,
+                impact_category=ImpactCategory.SECURITY,
+                priority_score=90.0,
+            ),
+            _make_triage_result(
+                issue_id=2,
+                duplicate_of=1,
+                impact_category=ImpactCategory.CRASH,
+                priority_score=50.0,
+            ),
+        ]
+        groups = engine._build_groups(issues, results)
+        # Canonical is id=1 (higher priority), so impact should be SECURITY
+        assert groups[0].impact_category == ImpactCategory.SECURITY
+
 
 # ---------------------------------------------------------------------------
 # TriageEngine._estimate_complexity
@@ -626,6 +921,63 @@ class TestEstimateComplexity:
         updated = engine._estimate_complexity([group], issues)
         assert updated[0].complexity == Complexity.UNKNOWN
 
+    def test_sets_complexity_low(self):
+        group = self._make_group("group_001", [1])
+        response = json.dumps([
+            {"group_id": "group_001", "complexity": "low", "reasoning": "Simple fix."}
+        ])
+        issues = [_make_issue(id=1)]
+        engine = self._engine_with_complexity_response(response)
+        updated = engine._estimate_complexity([group], issues)
+        assert updated[0].complexity == Complexity.LOW
+
+    def test_sets_complexity_medium(self):
+        group = self._make_group("group_001", [1])
+        response = json.dumps([
+            {"group_id": "group_001", "complexity": "medium", "reasoning": "Moderate effort."}
+        ])
+        issues = [_make_issue(id=1)]
+        engine = self._engine_with_complexity_response(response)
+        updated = engine._estimate_complexity([group], issues)
+        assert updated[0].complexity == Complexity.MEDIUM
+
+    def test_multiple_groups_complexity_assigned_correctly(self):
+        groups = [
+            self._make_group("group_001", [1]),
+            self._make_group("group_002", [2]),
+            self._make_group("group_003", [3]),
+        ]
+        response = json.dumps([
+            {"group_id": "group_001", "complexity": "low", "reasoning": "Easy."},
+            {"group_id": "group_002", "complexity": "high", "reasoning": "Hard."},
+            {"group_id": "group_003", "complexity": "medium", "reasoning": "Moderate."},
+        ])
+        issues = [_make_issue(id=i) for i in [1, 2, 3]]
+        engine = self._engine_with_complexity_response(response)
+        updated = engine._estimate_complexity(groups, issues)
+        complexity_by_id = {g.id: g.complexity for g in updated}
+        assert complexity_by_id["group_001"] == Complexity.LOW
+        assert complexity_by_id["group_002"] == Complexity.HIGH
+        assert complexity_by_id["group_003"] == Complexity.MEDIUM
+
+    def test_non_array_response_keeps_unknown(self):
+        group = self._make_group("group_001", [1])
+        engine = self._engine_with_complexity_response('{"group_id": "group_001"}')
+        issues = [_make_issue(id=1)]
+        updated = engine._estimate_complexity([group], issues)
+        assert updated[0].complexity == Complexity.UNKNOWN
+
+    def test_missing_group_id_in_response_keeps_unknown(self):
+        group = self._make_group("group_001", [1])
+        response = json.dumps([
+            {"complexity": "high", "reasoning": "Missing group_id field."},
+        ])
+        issues = [_make_issue(id=1)]
+        engine = self._engine_with_complexity_response(response)
+        updated = engine._estimate_complexity([group], issues)
+        # group_001 not in response → stays UNKNOWN
+        assert updated[0].complexity == Complexity.UNKNOWN
+
 
 # ---------------------------------------------------------------------------
 # TriageEngine._assign_fix_order
@@ -695,6 +1047,45 @@ class TestAssignFixOrder:
     def test_empty_groups_returns_empty(self):
         engine = self._engine()
         assert engine._assign_fix_order([]) == []
+
+    def test_fix_orders_start_at_one(self):
+        engine = self._engine()
+        groups = [
+            self._make_group("group_001", Severity.HIGH, 70.0, [1]),
+            self._make_group("group_002", Severity.MEDIUM, 40.0, [2]),
+        ]
+        ranked = engine._assign_fix_order(groups)
+        orders = sorted(g.fix_order for g in ranked)
+        assert orders[0] == 1
+
+    def test_single_group_gets_fix_order_one(self):
+        engine = self._engine()
+        groups = [self._make_group("group_001", Severity.CRITICAL, 99.0, [1])]
+        ranked = engine._assign_fix_order(groups)
+        assert ranked[0].fix_order == 1
+
+    def test_severity_order_critical_high_medium_low(self):
+        engine = self._engine()
+        groups = [
+            self._make_group("g_low", Severity.LOW, 25.0, [4]),
+            self._make_group("g_med", Severity.MEDIUM, 50.0, [3]),
+            self._make_group("g_high", Severity.HIGH, 75.0, [2]),
+            self._make_group("g_crit", Severity.CRITICAL, 95.0, [1]),
+        ]
+        ranked = engine._assign_fix_order(groups)
+        ranked_by_id = {g.id: g.fix_order for g in ranked}
+        assert ranked_by_id["g_crit"] < ranked_by_id["g_high"]
+        assert ranked_by_id["g_high"] < ranked_by_id["g_med"]
+        assert ranked_by_id["g_med"] < ranked_by_id["g_low"]
+
+    def test_original_groups_not_mutated(self):
+        """_assign_fix_order should return new objects, not mutate originals."""
+        engine = self._engine()
+        original = self._make_group("group_001", Severity.HIGH, 70.0, [1])
+        assert original.fix_order == 0
+        engine._assign_fix_order([original])
+        # Original should not be changed (model_copy creates new instance)
+        assert original.fix_order == 0
 
 
 # ---------------------------------------------------------------------------
@@ -870,6 +1261,73 @@ class TestTriageEngineRun:
         assert len(report.triage_results) == 1
         assert report.triage_results[0].issue_id == 1
 
+    def test_run_with_source_file_in_metadata(self):
+        issues = [_make_issue(id=1)]
+        triage_resp = self._build_triage_response(issues)
+
+        client = MagicMock()
+        client.provider = LLMProvider.OPENAI
+        client.model = "gpt-4o"
+        client.render_and_complete.side_effect = [triage_resp, "[]"]
+
+        engine = TriageEngine(
+            llm_client=client,
+            source_file="/path/to/issues.json",
+        )
+        report = engine.run(issues)
+        assert report.metadata.source_file == "/path/to/issues.json"
+
+    def test_ungrouped_is_empty_when_all_issues_in_groups(self):
+        issues = [_make_issue(id=1), _make_issue(id=2)]
+        triage_resp = self._build_triage_response(issues)
+
+        client = MagicMock()
+        client.provider = LLMProvider.OPENAI
+        client.model = "gpt-4o"
+        client.render_and_complete.side_effect = [triage_resp, "[]"]
+
+        engine = TriageEngine(llm_client=client)
+        report = engine.run(issues)
+
+        # All issues should be in groups
+        grouped = {iid for g in report.groups for iid in g.issue_ids}
+        assert {1, 2}.issubset(grouped)
+        assert report.ungrouped_issue_ids == []
+
+    def test_metadata_total_groups_matches_groups_list(self):
+        issues = [_make_issue(id=i) for i in range(1, 5)]
+        triage_resp = self._build_triage_response(issues)
+
+        client = MagicMock()
+        client.provider = LLMProvider.OPENAI
+        client.model = "gpt-4o"
+        client.render_and_complete.side_effect = [triage_resp, "[]"]
+
+        engine = TriageEngine(llm_client=client)
+        report = engine.run(issues)
+
+        assert report.metadata.total_groups == len(report.groups)
+
+    def test_empty_report_has_generated_at_set(self):
+        client = _make_llm_client()
+        engine = TriageEngine(llm_client=client)
+        report = engine.run([])
+        assert report.metadata.generated_at is not None
+        assert isinstance(report.metadata.generated_at, datetime)
+
+    def test_run_with_triage_error_from_llm(self):
+        from bug_triage.llm_client import LLMError
+
+        issues = [_make_issue(id=1)]
+        client = MagicMock()
+        client.provider = LLMProvider.OPENAI
+        client.model = "gpt-4o"
+        client.render_and_complete.side_effect = LLMError("API down")
+
+        engine = TriageEngine(llm_client=client)
+        with pytest.raises(TriageError):
+            engine.run(issues)
+
 
 # ---------------------------------------------------------------------------
 # triage_issues convenience function
@@ -908,3 +1366,70 @@ class TestTriageIssuesConvenienceFunction:
         )
         assert report.metadata.repository == "owner/repo"
         assert report.metadata.total_issues == 1
+
+    def test_convenience_function_uses_batch_size(self):
+        """batch_size parameter is forwarded to the TriageEngine."""
+        issues = [_make_issue(id=i) for i in range(1, 7)]  # 6 issues
+        client = MagicMock()
+        client.provider = LLMProvider.OPENAI
+        client.model = "gpt-4o"
+        # With batch_size=2 and 6 issues → 3 triage calls + 1 complexity call
+        client.render_and_complete.return_value = "[]"
+
+        triage_issues(
+            issues=issues,
+            llm_client=client,
+            batch_size=2,
+        )
+        # 3 triage batches + 1 complexity call = 4 total calls
+        assert client.render_and_complete.call_count == 4
+
+    def test_convenience_function_empty_issues(self):
+        client = _make_llm_client()
+        report = triage_issues(
+            issues=[],
+            llm_client=client,
+        )
+        assert report.metadata.total_issues == 0
+        assert report.groups == []
+        client.render_and_complete.assert_not_called()
+
+    def test_convenience_function_passes_source_file(self):
+        issues = [_make_issue(id=1)]
+        client = MagicMock()
+        client.provider = LLMProvider.OPENAI
+        client.model = "gpt-4o"
+        client.render_and_complete.side_effect = [
+            json.dumps([{
+                "issue_id": 1, "severity": "low", "impact_category": "other",
+                "priority_score": 10.0, "summary": "S.", "reasoning": "R.",
+                "duplicate_of": None, "related_issue_ids": [], "complexity": "low", "tags": [],
+            }]),
+            "[]",
+        ]
+        report = triage_issues(
+            issues=issues,
+            llm_client=client,
+            source_file="/my/file.json",
+        )
+        assert report.metadata.source_file == "/my/file.json"
+
+    def test_output_format_reflected_in_metadata(self):
+        issues = [_make_issue(id=1)]
+        client = MagicMock()
+        client.provider = LLMProvider.OPENAI
+        client.model = "gpt-4o"
+        client.render_and_complete.side_effect = [
+            json.dumps([{
+                "issue_id": 1, "severity": "low", "impact_category": "other",
+                "priority_score": 10.0, "summary": "S.", "reasoning": "R.",
+                "duplicate_of": None, "related_issue_ids": [], "complexity": "low", "tags": [],
+            }]),
+            "[]",
+        ]
+        report = triage_issues(
+            issues=issues,
+            llm_client=client,
+            output_format=OutputFormat.JSON,
+        )
+        assert report.metadata.output_format == OutputFormat.JSON
