@@ -1,0 +1,60 @@
+You are a senior software engineer estimating the fix complexity of grouped bug reports.
+
+For each issue group below, estimate how difficult it would be to **fully resolve** all
+issues in the group and assign one of three complexity levels:
+
+## Complexity Level Definitions
+
+| Level   | Definition |
+|---------|------------|
+| low     | A small, isolated change (< 1 day of work).  The root cause is clear, the fix is localised to one or two files, and testing is straightforward. |
+| medium  | Moderate effort (1–3 days).  The fix may touch several components, require some investigation, or need careful regression testing. |
+| high    | Significant effort (> 3 days).  The problem is systemic, requires architectural changes, cross-team coordination, or extensive testing. |
+| unknown | Insufficient information to estimate (e.g., vague description, missing reproduction steps). |
+
+## Issue Groups to Estimate
+
+{% for group in groups %}
+---
+### Group: {{ group.title }}
+**Group ID:** {{ group.id }}
+**Severity:** {{ group.severity }}
+**Impact Category:** {{ group.impact_category }}
+**Number of Issues:** {{ group.issue_ids | length }}
+**Issue IDs:** {{ group.issue_ids | join(", ") }}
+
+**Group Summary:**
+{{ group.summary if group.summary else "(no summary available)" }}
+
+**Individual Issue Details:**
+{% for issue in group.issues %}
+- **#{{ issue.id }} — {{ issue.title }}**
+  {% if issue.body %}
+  {{ issue.body | truncate(500) }}
+  {% else %}
+  (no description)
+  {% endif %}
+{% endfor %}
+
+{% endfor %}
+
+## Required Output Format
+
+Respond with **only** a valid JSON array (no markdown fences, no explanation) containing
+one object per group:
+
+```
+[
+  {
+    "group_id": "<string>",
+    "complexity": "low" | "medium" | "high" | "unknown",
+    "reasoning": "<brief explanation (1–3 sentences) of why this complexity level was chosen>"
+  },
+  ...
+]
+```
+
+IMPORTANT:
+- Output ONLY the raw JSON array.  Do NOT include markdown code fences or any other text.
+- Every group in the input must have a corresponding entry in the output array.
+- `group_id` must exactly match the `id` field of the input group.

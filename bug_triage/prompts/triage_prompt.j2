@@ -1,0 +1,88 @@
+You are an expert software engineering lead performing structured bug triage.
+
+Your task is to analyse the following {{ issues | length }} GitHub issue(s) and produce a
+structured JSON triage result for EACH issue.
+
+## Severity Rubric
+
+| Severity | Definition |
+|----------|------------|
+| critical | Data loss, security vulnerability, authentication bypass, or complete service unavailability affecting production users. Fix immediately. |
+| high     | Major feature broken, significant performance degradation, crash affecting many users, or a workaround exists but is unacceptable. Fix this sprint. |
+| medium   | Feature partially broken, moderate user impact, a reasonable workaround exists. Fix next sprint. |
+| low      | Minor cosmetic issue, rare edge case, enhancement, or nice-to-have improvement. Fix when time permits. |
+
+## Impact Category Definitions
+
+- **crash** — The application or a major component crashes or becomes unavailable.
+- **performance** — The system is significantly slower or consumes excessive resources.
+- **security** — Vulnerability, data exposure, authentication/authorisation flaw.
+- **ux** — The user interface is confusing, broken, or inaccessible.
+- **data_loss** — User or system data is deleted, corrupted, or not persisted correctly.
+- **regression** — Something that previously worked is now broken after a change.
+- **other** — Does not fit the above categories.
+
+## Deduplication Instructions
+
+Identify issues that describe the **same underlying problem** (duplicates) or issues that
+are **related but distinct** (related).  Use the `duplicate_of` and `related_issue_ids`
+fields accordingly.
+
+- Set `duplicate_of` to the ID of the **canonical** (first/most-detailed) issue when an
+  issue is a duplicate.  Leave as `null` otherwise.
+- Set `related_issue_ids` to a list of IDs of issues that are related but NOT duplicates.
+
+## Priority Score Guidelines
+
+Score each issue from **0** (lowest priority) to **100** (highest priority) based on:
+1. Severity (critical=80–100 base, high=55–79, medium=30–54, low=0–29)
+2. Number of users likely affected
+3. Availability of a workaround (no workaround → higher score)
+4. Security or data-loss implications (add 10–15 points)
+5. Age of the issue (older unresolved issues get a small bump)
+
+## Issues to Triage
+
+{% for issue in issues %}
+---
+### Issue #{{ issue.id }}
+**Title:** {{ issue.title }}
+**Labels:** {{ issue.labels | join(", ") if issue.labels else "(none)" }}
+**Created:** {{ issue.created_at.strftime("%Y-%m-%d") if issue.created_at else "unknown" }}
+**Comments:** {{ issue.comments_count }}
+**URL:** {{ issue.url if issue.url else "(no URL)" }}
+
+**Description:**
+{{ issue.body | truncate(2000) if issue.body else "(no description provided)" }}
+
+{% endfor %}
+
+## Required Output Format
+
+Respond with **only** a valid JSON array (no markdown fences, no explanation) containing
+one object per issue with exactly these fields:
+
+```
+[
+  {
+    "issue_id": <int>,
+    "severity": "critical" | "high" | "medium" | "low",
+    "impact_category": "crash" | "performance" | "security" | "ux" | "data_loss" | "regression" | "other",
+    "priority_score": <float 0–100>,
+    "summary": "<one-sentence summary>",
+    "reasoning": "<brief explanation of severity and impact classification>",
+    "duplicate_of": <int or null>,
+    "related_issue_ids": [<int>, ...],
+    "complexity": "low" | "medium" | "high" | "unknown",
+    "tags": ["<tag>", ...]
+  },
+  ...
+]
+```
+
+IMPORTANT:
+- Output ONLY the raw JSON array.  Do NOT include markdown code fences or any other text.
+- Every issue in the input must have a corresponding entry in the output array.
+- `issue_id` must exactly match the `id` field from the input issue.
+- `related_issue_ids` and `tags` should be empty arrays `[]` if not applicable.
+- `duplicate_of` must be `null` if the issue is NOT a duplicate.
